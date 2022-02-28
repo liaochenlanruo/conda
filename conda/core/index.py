@@ -18,7 +18,7 @@ from .._vendor.toolz import concat, concatv
 from ..base.context import context
 from ..common.compat import itervalues
 from ..common.io import ThreadLimitedThreadPoolExecutor, time_recorder
-from ..exceptions import ChannelNotAllowed, InvalidSpec
+from ..exceptions import ChannelNotAllowed, InvalidSpec, PluginError
 from ..gateways.logging import initialize_logging
 from ..models.channel import Channel, all_channel_urls
 from ..models.enums import PackageType
@@ -156,81 +156,28 @@ def _supplement_index_with_features(index, features=()):
 
 
 def _supplement_index_with_system(index):
-    cuda_version = context.cuda_version
-    if cuda_version is not None:
-        rec = _make_virtual_package('__cuda', cuda_version)
-        index[rec] = rec
-
-    dist_name, dist_version = context.os_distribution_name_version
-    is_osx = context.subdir.startswith("osx-")
-    if is_osx:
-        # User will have to set env variable when using CONDA_SUBDIR var
-        dist_version = os.environ.get('CONDA_OVERRIDE_OSX', dist_version)
-        if dist_version:
-            rec = _make_virtual_package('__osx', dist_version)
-            index[rec] = rec
-
-    libc_family, libc_version = context.libc_family_version
-    is_linux = context.subdir.startswith("linux-")
-    if is_linux:
-        # By convention, the kernel release string should be three or four
-        # numeric components, separated by dots, followed by vendor-specific
-        # bits.  For the purposes of versioning the `__linux` virtual package,
-        # discard everything after the last digit of the third or fourth
-        # numeric component; note that this breaks version ordering for
-        # development (`-rcN`) kernels, but we'll deal with that later.
-        dist_version = os.environ.get('CONDA_OVERRIDE_LINUX', context.platform_system_release[1])
-        m = re.match(r'\d+\.\d+(\.\d+)?(\.\d+)?', dist_version)
-        rec = _make_virtual_package('__linux', m.group() if m else "0")
-        index[rec] = rec
-
-        if not (libc_family and libc_version):
-            # Default to glibc when using CONDA_SUBDIR var
-            libc_family = "glibc"
-        libc_version = os.getenv("CONDA_OVERRIDE_{}".format(libc_family.upper()), libc_version)
-        if libc_version:
-            rec = _make_virtual_package('__' + libc_family, libc_version)
-            index[rec] = rec
-
-    if is_linux or is_osx:
-        rec = _make_virtual_package('__unix')
-        index[rec] = rec
-    elif context.subdir.startswith('win-'):
-        rec = _make_virtual_package('__win')
-        index[rec] = rec
-
+    """
     archspec_name = get_archspec_name()
     archspec_name = os.getenv("CONDA_OVERRIDE_ARCHSPEC", archspec_name)
     if archspec_name:
         rec = _make_virtual_package('__archspec', "1", archspec_name)
         index[rec] = rec
+    """
 
-
-def get_archspec_name():
-    from conda.base.context import non_x86_machines, _arch_names, _platform_map
-
-    target_plat, target_arch = context.subdir.split("-")
-    # This has to reverse what Context.subdir is doing
-    if target_arch in non_x86_machines:
-        machine = target_arch
-    elif target_arch == "zos":
-        return None
-    elif target_arch.isdigit():
-        machine = _arch_names[int(target_arch)]
-    else:
-        return None
-
-    # This has to match what Context.platform is doing
-    native_plat = _platform_map.get(sys.platform, 'unknown')
-
-    if native_plat != target_plat or platform.machine() != machine:
-        return machine
-
-    try:
-        import archspec.cpu
-        return str(archspec.cpu.host())
-    except ImportError:
-        return machine
+    pm = context.get_plugin_manager()
+    registered_names = []
+    for package in pm.hook.conda_cli_register_virtual_packages():
+        if package.name in registered_names:
+            raise PluginError(
+                'Conflicting virtual pacjage entries found for the '
+                f'`{package.name}` key. Multiple Conda plugins '
+                'are registering this subcommand via the '
+                '`conda_cli_register_virtual_packages` hook, please make sure '
+                'you don\'t have any incompatible plugins installed.'
+            )
+        registered_names.append(package.name)
+        rec = _make_virtual_package(f'__{package.name}', package.version)
+        index[rec] = rec
 
 
 def calculate_channel_urls(channel_urls=(), prepend=True, platform=None, use_local=False):

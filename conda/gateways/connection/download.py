@@ -29,7 +29,38 @@ def disable_ssl_verify_warning():
     warnings.simplefilter('ignore', InsecureRequestWarning)
 
 
+from rich import print
+
+import inspect
+
+def get_caller(level=1):
+    return inspect.stack()[level+1][3]
+
+def log_call(func):
+    parameter_names = [
+        parameter.name for parameter in inspect.signature(func).parameters.values()
+    ]
+    def small_repr(value):
+        value_repr = repr(value)
+        if len(value_repr) > 128:
+            value_repr = value_repr[:128] + '...'
+        return value_repr
+    def print_arg(name, value):
+        print(f'\t{name} = {small_repr(value)} {type(value)}', file=sys.stderr)
+    def new_func(*args, **kwargs):
+        print(f'[bright_black]> {func.__qualname__} (called by [bold]{get_caller()}[/bold])', file=sys.stderr)
+        for i, arg in enumerate(args):
+            print_arg(parameter_names[i], arg)
+        for name, value in kwargs.items():
+            print_arg(name, value)
+        ret = func(*args, **kwargs)
+        print(f'[bright_black]< {func.__qualname__} => return', small_repr(ret), file=sys.stderr)
+        return ret
+    return new_func
+
+
 @time_recorder("download")
+@log_call
 def download(
         url, target_full_path, md5=None, sha256=None, size=None, progress_update_callback=None
 ):
